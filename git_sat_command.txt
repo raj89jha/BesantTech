@@ -1,0 +1,420 @@
+    1  git clone 
+    2  git clone https://git.cropin.in/cropinV2/smartfarm/farm/com.cropin.smartfarm.farm.services.git
+    3  git clone https://git.cropin.in/cropinV2/smartfarm/farm/com.cropin.smartfarm.farm.services.git
+    4  git clone https://git.cropin.in/cropinV2/smartfarm/farm/com.cropin.smartfarm.farm.services.git
+    5  git clone https://git.cropin.in/cropinV2/smartfarm/farm/com.cropin.smartfarm.farm.services.git
+    6  git clone 'https://git.cropin.in/cropinV2/smartfarm/farm/com.cropin.smartfarm.farm.services.git/
+    7  git clone 'https://git.cropin.in/cropinV2/smartfarm/farm/com.cropin.smartfarm.farm.services.git/
+    8  git clone 'https://git.cropin.in/cropinV2/smartfarm/farm/com.cropin.smartfarm.farm.services.git/
+    9  #!/bin/bash
+   10  #
+   11  # Startup script for Artifactory in Tomcat Servlet Engine
+   12  #
+   13  errorArtHome() {     echo;     echo -e "\033[31m** $1\033[0m";     echo;     exit 1; }
+   14  checkArtHome() {     if [ -z "$ARTIFACTORY_HOME" ] || [ ! -d "$ARTIFACTORY_HOME" ]; then         errorArtHome "ERROR: Artifactory home folder not defined or does not exists at $ARTIFACTORY_HOME";     fi; }
+   15  checkTomcatHome() {     if [ -z "$TOMCAT_HOME" ] || [ ! -d "$TOMCAT_HOME" ]; then         errorArtHome "ERROR: Tomcat Artifactory folder not defined or does not exists at $TOMCAT_HOME";     fi;     export CATALINA_HOME="$TOMCAT_HOME"; }
+   16  createLogsLink() {     mkdir -p $ARTIFACTORY_HOME/logs/catalina || errorArtHome "Could not create dir $ARTIFACTORY_HOME/logs/catalina";     if [ ! -L "$TOMCAT_HOME/logs" ];     then         ln -s $ARTIFACTORY_HOME/logs/catalina $TOMCAT_HOME/logs ||             errorArtHome "Could not create link from $TOMCAT_HOME/logs to $ARTIFACTORY_HOME/logs/catalina";     fi; }
+   17  findShutdownPort() {     SHUTDOWN_PORT=`netstat -vatn|grep LISTEN|grep -w $CATALINA_MGNT_PORT|wc -l`; }
+   18  isAlive() {     pidValue="";     javaPs="";     if [ -e "$ARTIFACTORY_PID" ]; then         pidValue=`cat $ARTIFACTORY_PID`;         if [ -n "$pidValue" ]; then             javaPs="`ps -p $pidValue | grep java`";         fi;     fi; }
+   19  # Check if conditions to run local METADATA are met
+   20  runMetadata() {     if [ "${START_LOCAL_MDS}" == true ] && [ -f ${metadataScript} ]; then         return 0;     else         return 1;     fi; }
+   21  startMetadata() {     if runMetadata; then         chmod +x ${metadataScript};         ${metadataScript} start;     fi; }
+   22  stopMetadata() {     if runMetadata; then         chmod +x ${metadataScript};         ${metadataScript} stop;     fi; }
+   23  # Check if conditions to run local router are met
+   24  runRouter() {     if [[ -f ${routerScript} ]]; then         return 0;     else         return 1;     fi; }
+   25  startRouter() {     if runRouter; then         chmod +x ${routerScript};         . ${routerScript} start;     fi; }
+   26  stopRouter() {     if runRouter; then         chmod +x ${routerScript};         ${routerScript} stop;     fi; }
+   27  # Check if conditions to run local replicator are met
+   28  runReplicator() {     if [ "${START_LOCAL_REPLICATOR}" == true ] && [ -f ${replicatorScript} ]; then         return 0;     else         return 1;     fi; }
+   29  startReplicator() {     if runReplicator; then         chmod +x ${replicatorScript};         ${replicatorScript} start;     fi; }
+   30  stopReplicator() {     if runReplicator; then         chmod +x ${replicatorScript};         ${replicatorScript} stop;     fi; }
+   31  stop() {     echo finding     CATALINA_MGNT_PORT=8015;     echo "Using the default catalina management port ($CATALINA_MGNT_PORT) to test shutdown";     isAlive;     findShutdownPort;     if [ $SHUTDOWN_PORT -eq 0 ] && [ -z "$javaPs" ]; then         echo "Artifactory Tomcat already stopped";         RETVAL=0;     else         echo "Stopping Artifactory Tomcat...";         if [ $SHUTDOWN_PORT -ne 0 ]; then             $TOMCAT_HOME/bin/shutdown.sh;             RETVAL=$?;         else             RETVAL=1;         fi;         killed=false;         if [ $RETVAL -ne 0 ]; then             echo "WARN: Artifactory Tomcat server shutdown script failed. Sending kill signal to $pidValue";             if [ -n "$pidValue" ]; then                 killed=true;                 kill $pidValue;                 RETVAL=$?;             fi;         fi         sleep 2;         findShutdownPort;         isAlive;         nbSeconds=1;         while [ $SHUTDOWN_PORT -ne 0 ] || [ -n "$javaPs" ] && [ $nbSeconds -lt 30 ]; do             if [ $nbSeconds -eq 10 ] && [ -n "$pidValue" ]; then                 echo "WARN: Artifactory Tomcat server shutdown not done after 10 seconds. Sending kill signal";                 kill $pidValue;                 RETVAL=$?;             fi;             if [ $nbSeconds -eq 25 ] && [ -n "$pidValue" ]; then                 echo "WARN: Artifactory Tomcat server shutdown not done after 25 seconds. Sending kill -9 signal";                 kill -9 $pidValue;                 RETVAL=$?;             fi;             sleep 1;             let "nbSeconds = $nbSeconds + 1";             findShutdownPort;             isAlive;         done;         if [ $SHUTDOWN_PORT -eq 0 ] && [ -z "$javaPs" ]; then            echo "Artifactory Tomcat stopped";         else            echo "ERROR: Artifactory Tomcat did not stop";            RETVAL=1;         fi;     fi;     [ $RETVAL=0 ] && rm -f "$ARTIFACTORY_PID";      stopReplicator;     stopMetadata;     stopRouter;  }
+   32  start() {     if [[ -f "/etc/opt/jfrog/artifactory/default" ]]; then         . /etc/opt/jfrog/artifactory/default;     fi;      JOIN_PATHS=$ARTIFACTORY_HOME;      if runMetadata;then        export METADATA_HOME="$JOIN_PATHS/metadata";        export JOIN_PATHS=$JOIN_PATHS:$METADATA_HOME;     fi;     export CATALINA_PID="$ARTIFACTORY_PID";     [ -x $TOMCAT_HOME/bin/catalina.sh ] || chmod +x $TOMCAT_HOME/bin/*.sh;     if [ -z "$@" ];     then         startRouter;         startReplicator;         startMetadata;          setCatalinaOpts;         $TOMCAT_HOME/bin/catalina.sh run;     else         if [ -n "$ARTIFACTORY_PID" ];         then             mkdir -p $(dirname "$ARTIFACTORY_PID") ||             errorArtHome "Could not create dir for $ARTIFACTORY_PID";         fi;         if [ "$@" == "stop" ];         then             setCatalinaOpts;             stop;         else             startRouter;             startReplicator;             startMetadata;             setCatalinaOpts             $TOMCAT_HOME/bin/catalina.sh "$@";         fi;     fi; }
+   33  check() {     if [ -f $ARTIFACTORY_PID ]; then         echo "Artifactory is running, on pid="`cat $ARTIFACTORY_PID`;         echo "";         exit 0;     fi;      echo "Checking arguments to Artifactory: ";     echo "ARTIFACTORY_HOME     =  $ARTIFACTORY_HOME";     echo "TOMCAT_HOME          =  $TOMCAT_HOME";     echo "ARTIFACTORY_PID      =  $ARTIFACTORY_PID";     echo "JAVA_HOME            =  $JAVA_HOME";     echo "JAVA_OPTIONS         =  $JAVA_OPTIONS";     echo;      exit 1; }
+   34  setCatalinaOpts() {     export CATALINA_OPTS="$JAVA_OPTIONS -Dartifactory.home=$ARTIFACTORY_HOME -Dfile.encoding=UTF8 -Djruby.bytecode.version=1.8 -Djruby.compile.invokedynamic=false -Djfrog.join.key.paths=$JOIN_PATHS"; }
+   35  checkJavaVersion(){     if [[ -n "$JAVA_HOME" ]] && [[ -x "$JAVA_HOME/bin/java" ]];  then         echo "Found java executable in JAVA_HOME ($JAVA_HOME)";         _java="$JAVA_HOME/bin/java";     elif type -p java; then         _java=java;     else         echo "No java found";     fi;      if [[ "$_java" ]]; then         "$_java" -version 2>&1|         awk -F\" '/version/{\
+   36              if ($2 < 1.8) {\
+   37                  printf "%s is too old must be at least java 1.8\n", $2;\
+   38                  exit 0;\
+   39              } else exit 1}' && exit 99;     fi; }
+   40  artBinDir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+   41  export ARTIFACTORY_HOME="$(cd "$(dirname "${artBinDir}")" && pwd)"
+   42  export REPLICATOR_DATA="${ARTIFACTORY_HOME}/replicator"
+   43  export METADATA_DATA="${ARTIFACTORY_HOME}/metadata"
+   44  export ROUTER_DATA="${ARTIFACTORY_HOME}/router"
+   45  artDefaultFile="$artBinDir/artifactory.default"
+   46  replicatorScript=${artBinDir}/replicator/replicator.sh
+   47  metadataScript=${artBinDir}/metadata/metadata.sh
+   48  routerScript=${artBinDir}/../router/bin/router.sh
+   49  . $artDefaultFile || errorArtHome "ERROR: $artDefaultFile does not exist or not executable"
+   50  #!/bin/bash -x
+   51  #
+   52  # Init script for Artifactory service (currently systemd)
+   53  #
+   54  # chkconfig: 345 86 14
+   55  # description: Artifactory Tomcat Servlet Engine
+   56  # processname: artifactory
+   57  # pidfile: /var/opt/jfrog/run/artifactory.pid
+   58  #
+   59  ### BEGIN INIT INFO
+   60  # Provides:          artifactory
+   61  # Required-Start:    $remote_fs $syslog $network
+   62  # Required-Stop:     $remote_fs $syslog $network
+   63  # Default-Start:     3 4 5
+   64  # Default-Stop:      0 1 6
+   65  # Short-Description: Start Artifactory on Tomcat
+   66  # Description:       Manages the services needed to run Artifactory on a dedicated Tomcat
+   67  ### END INIT INFO
+   68  #
+   69  errorArtHome() {     echo;     echo -e "\033[31m** ERROR: $1\033[0m";     echo;     exit 1; }
+   70  checkArtHome() {     if [ -z "$ARTIFACTORY_HOME" ] || [ ! -d "$ARTIFACTORY_HOME" ]; then         errorArtHome "Artifactory home folder not defined or does not exists at $ARTIFACTORY_HOME";     fi; }
+   71  checkArtPid() {     if [ -z "$ARTIFACTORY_PID" ]; then         errorArtHome "Artifactory pid destination ARTIFACTORY_PID was not set in $artDefaultFile ! Please add it!";     fi; }
+   72  checkTomcatHome() {     if [ -z "$TOMCAT_HOME" ] || [ ! -d "$TOMCAT_HOME" ]; then         errorArtHome "Tomcat Artifactory folder not defined or does not exists at $TOMCAT_HOME";     fi; }
+   73  checkArtUser() {     if [ -z "$ARTIFACTORY_USER" ]; then         ARTIFACTORY_USER=${USER};     fi; }
+   74  findShutdownPort() {     SHUTDOWN_PORT=`netstat -vatn|grep LISTEN|grep -w $CATALINA_MGNT_PORT|wc -l`; }
+   75  isAlive() {     pidValue="";     javaPs="";     if [[ -e "$ARTIFACTORY_PID" ]]; then         pidValue=$(cat ${ARTIFACTORY_PID});         if [ -n "$pidValue" ]; then             javaPs="$(ps -p ${pidValue} | grep java)";         fi;     fi; }
+   76  # Check if conditions to run local METADATA are met
+   77  runMetadata() {     if [[ "${START_LOCAL_MDS}" == true ]] && [[ -f ${metadataScript} ]]; then         return 0;     else         return 1;     fi; }
+   78  startMetadata() {     if runMetadata; then         chmod +x ${metadataScript};         su -s "/bin/sh" ${ARTIFACTORY_USER} -c "${metadataScript} start";     fi; }
+   79  stopMetadata() {     if runMetadata; then         chmod +x ${metadataScript};         su -s "/bin/sh" ${ARTIFACTORY_USER} -c "${metadataScript} stop";     fi; }
+   80  # TODO: omerk - temp opt-out instead of opt-in
+   81  START_LOCAL_ROUTER=${START_LOCAL_ROUTER:-true}
+   82  # Check if conditions to run local router are met
+   83  runRouter() {     if [[ -f ${routerScript} ]]; then         return 0;     else         return 1;     fi; }
+   84  startRouter() {     if runRouter; then         chmod +x ${routerScript} && chown -R ${ARTIFACTORY_USER}:${ARTIFACTORY_USER} ${artBinDir}/../router;         su -s "/bin/sh" ${ARTIFACTORY_USER} -c "${routerScript} start";     fi; }
+   85  stopRouter() {     if runRouter; then         chmod +x ${routerScript};         su -s "/bin/sh" ${ARTIFACTORY_USER} -c "${routerScript} stop";     fi; }
+   86  # Check if conditions to run local replicator are met
+   87  runReplicator() {     if [ "${START_LOCAL_REPLICATOR}" == true ] && [ -f ${replicatorScript} ]; then         return 0;     else         return 1;     fi; }
+   88  startReplicator() {     if runReplicator; then         chmod +x ${replicatorScript};         su -s "/bin/sh" ${ARTIFACTORY_USER} -c "${replicatorScript} start";     fi; }
+   89  stopReplicator() {     if runReplicator; then         chmod +x ${replicatorScript};         su -s "/bin/sh" ${ARTIFACTORY_USER} -c "${replicatorScript} stop";     fi; }
+   90  start() {     JOIN_PATHS=$ARTIFACTORY_HOME;     if runMetadata;then        export METADATA_HOME="$ARTIFACTORY_HOME/metadata";        export JOIN_PATHS=$JOIN_PATHS:$METADATA_HOME;     fi;      JAVA_OPTIONS="$JAVA_OPTIONS -Djfrog.join.key.paths=$JOIN_PATHS";     export CATALINA_OPTS=$JAVA_OPTIONS;      isAlive;     findShutdownPort;     if [ ${SHUTDOWN_PORT} -ne 0 ] || [ -n "$javaPs" ]; then         echo "Artifactory Tomcat already started";     else         echo "Starting Artifactory tomcat as user $ARTIFACTORY_USER...";         noFileVal=$(ulimit -n);         minNoFileMax=32000;         if [ "$noFileVal" != "unlimited" ] && [ ${noFileVal} -lt ${minNoFileMax} ]; then             ulimit -n ${minNoFileMax} || echo "WARNING: Max number of open files $noFileVal is too small!
+   91  You should add:
+   92  artifactory soft nofile $minNoFileMax
+   93  artifactory hard nofile $minNoFileMax
+   94  to your /etc/security/limits.conf file.";         fi;          minNbProcess=1024;         nbProcess=$(ulimit -u);         if [ "$nbProcess" != "unlimited" ] && [ ${nbProcess} -lt ${minNbProcess} ]; then             ulimit -u ${minNbProcess} || echo "WARNING: Number of processes $nbProcess is too small!
+   95  You should add:
+   96  artifactory soft nproc $minNbProcess
+   97  artifactory hard nproc $minNbProcess
+   98  to your /etc/security/limits.conf file.";         fi;         su -s "/bin/sh" ${ARTIFACTORY_USER} -c "export JAVA_HOME='$JAVA_HOME'; $TOMCAT_HOME/bin/startup.sh";         RETVAL=$?;         if [ ${RETVAL} -ne 0 ]; then             errorArtHome "Artifactory Tomcat server did not start. Please check the logs";         fi;         findShutdownPort;         nbSeconds=1;         START_TMO=${START_TMO:-60};         while [ ${SHUTDOWN_PORT} -eq 0 ] && [ ${nbSeconds} -lt ${START_TMO} ]; do             sleep 1;             let "nbSeconds = $nbSeconds + 1";             findShutdownPort;         done;         if [ ${SHUTDOWN_PORT} -eq 0 ]; then             errorArtHome "Artifactory Tomcat server did not start in 60 seconds. Please check the logs";         fi;         echo "Artifactory Tomcat started in normal mode";         startRouter;         startReplicator;         startMetadata;         [ ${RETVAL}=0 ];     fi; }
+   99  stop() {     isAlive;     findShutdownPort;     if [ ${SHUTDOWN_PORT} -eq 0 ] && [ -z "$javaPs" ]; then         echo "Artifactory Tomcat already stopped";         RETVAL=0;     else         echo "Stopping Artifactory Tomcat...";         if [ ${SHUTDOWN_PORT} -ne 0 ]; then             su -s "/bin/sh" ${ARTIFACTORY_USER} -c "export JAVA_HOME='$JAVA_HOME'; $TOMCAT_HOME/bin/shutdown.sh";             RETVAL=$?;         else             RETVAL=1;         fi;         killed=false;         if [ ${RETVAL} -ne 0 ]; then             echo "WARN: Artifactory Tomcat server shutdown script failed. Sending kill signal to $pidValue";             if [ -n "$pidValue" ]; then                 killed=true;                 kill ${pidValue};                 RETVAL=$?;             fi;         fi         sleep 2;         findShutdownPort;         nbSeconds=1;         while [ ${SHUTDOWN_PORT} -ne 0 ] && [ ${nbSeconds} -lt 30 ]; do             if [ ${nbSeconds} -eq 10 ] && [ -n "$pidValue" ]; then                 echo "WARN: Artifactory Tomcat server shutdown not done after 10 seconds. Sending kill signal";                 kill ${pidValue};                 RETVAL=$?;             fi;             if [ ${nbSeconds} -eq 25 ] && [ -n "$pidValue" ]; then                 echo "WARN: Artifactory Tomcat server shutdown not done after 25 seconds. Sending kill -9 signal";                 kill -9 ${pidValue};                 RETVAL=$?;             fi;             sleep 1;             let "nbSeconds = $nbSeconds + 1";             findShutdownPort;         done;         if [ ${SHUTDOWN_PORT} -eq 0 ]; then            echo "Artifactory Tomcat stopped";         else            echo "ERROR: Artifactory Tomcat did not stop";            RETVAL=1;         fi;     fi;     stopRouter;     stopReplicator;     stopMetadata;     [ $RETVAL=0 ] && rm -f "$CATALINA_LOCK_FILE" "$ARTIFACTORY_PID"; }
+  100  start_and_wait() {     start;     if [ -e ${ARTIFACTORY_PID} ]; then   PID=$(cat ${ARTIFACTORY_PID});   while [ ! -e ~artifactory/logs/artifactory.log ]; do       sleep 10;   done;   tail -f ~artifactory/logs/artifactory.log &   terminating() {       echo "Received stop";       stop;       while [ -e ${ARTIFACTORY_PID} ] || [ ps ${PID} >/dev/null 2>&1 ]; do     sleep 1;       done;       exit 0;   };   trap terminating SIGINT SIGTERM;   while :; do       sleep 5;   done;     fi;     echo Something went wrong ${PID} $?; }
+  101  status() {     findShutdownPort;     if [ ${SHUTDOWN_PORT} -eq 0 ]; then         if [ -e "$ARTIFACTORY_PID" ]; then             echo "ERROR: Artifactory is stopped but the pid file $ARTIFACTORY_PID still exist";             RETVAL=1;         else             if [ -e "$CATALINA_LOCK_FILE" ]; then                 echo "ERROR: Artifactory is stopped but the lock file $CATALINA_LOCK_FILE still exist";                 RETVAL=2;             else                 echo "Artifactory Tomcat stopped";                 RETVAL=3;             fi;         fi;     else         echo "Artifactory Tomcat running";         RETVAL=0;     fi; }
+  102  check() {     if [ -f ${ARTIFACTORY_PID} ]; then         echo "Artifactory is running, on pid="$(cat ${ARTIFACTORY_PID});         echo "";         exit 0;     fi;      echo "Checking arguments to Artifactory: ";     echo "ARTIFACTORY_HOME     =  $ARTIFACTORY_HOME";     echo "ARTIFACTORY_USER     =  $ARTIFACTORY_USER";     echo "TOMCAT_HOME          =  $TOMCAT_HOME";     echo "ARTIFACTORY_PID      =  $ARTIFACTORY_PID";     echo "JAVA_HOME            =  $JAVA_HOME";     echo "JAVA_OPTIONS         =  $JAVA_OPTIONS";     echo;      checkJavaVersion;      exit 1; }
+  103  checkJavaVersion(){     if [[ -n "$JAVA_HOME" ]] && [[ -x "$JAVA_HOME/bin/java" ]];  then         echo found java executable in JAVA_HOME;         _java="$JAVA_HOME/bin/java";     elif type -p java; then         _java=java;     else         echo "no java";     fi;      if [[ "$_java" ]]; then         "$_java" -version 2>&1|         awk -F\" '/version/{\
+  104              if ($2 < 1.8) {\
+  105                  printf "%s is too old must be at least java 1.8\n", $2;\
+  106                  exit 0;\
+  107              } else exit 1}' && exit 99;     fi; }
+  108  #
+  109  artBinDir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  110  ARTIFACTORY_PID=""
+  111  artDefaultFile="/etc/opt/jfrog/artifactory/default"
+  112  if [ ! -e ${artDefaultFile} ]; then     sed '/ARTIFACTORY/s/^#//;/ARTIFACTORY_PID/s-$ARTIFACTORY_HOME-/var/opt/jfrog-' </opt/jfrog/artifactory/bin/artifactory.default >${artDefaultFile}; fi
+  113  . ${artDefaultFile} || errorArtHome "ERROR: $artDefaultFile does not exist or not executable"
+  114  #!/bin/bash
+  115  #
+  116  # Startup script for Artifactory in Tomcat Servlet Engine
+  117  #
+  118  errorArtHome() {     echo;     echo -e "\033[31m** $1\033[0m";     echo;     exit 1; }
+  119  checkArtHome() {     if [ -z "$ARTIFACTORY_HOME" ] || [ ! -d "$ARTIFACTORY_HOME" ]; then         errorArtHome "ERROR: Artifactory home folder not defined or does not exists at $ARTIFACTORY_HOME";     fi; }
+  120  checkTomcatHome() {     if [ -z "$TOMCAT_HOME" ] || [ ! -d "$TOMCAT_HOME" ]; then         errorArtHome "ERROR: Tomcat Artifactory folder not defined or does not exists at $TOMCAT_HOME";     fi;     export CATALINA_HOME="$TOMCAT_HOME"; }
+  121  createLogsLink() {     mkdir -p $ARTIFACTORY_HOME/logs/catalina || errorArtHome "Could not create dir $ARTIFACTORY_HOME/logs/catalina";     if [ ! -L "$TOMCAT_HOME/logs" ];     then         ln -s $ARTIFACTORY_HOME/logs/catalina $TOMCAT_HOME/logs ||             errorArtHome "Could not create link from $TOMCAT_HOME/logs to $ARTIFACTORY_HOME/logs/catalina";     fi; }
+  122  findShutdownPort() {     SHUTDOWN_PORT=`netstat -vatn|grep LISTEN|grep -w $CATALINA_MGNT_PORT|wc -l`; }
+  123  isAlive() {     pidValue="";     javaPs="";     if [ -e "$ARTIFACTORY_PID" ]; then         pidValue=`cat $ARTIFACTORY_PID`;         if [ -n "$pidValue" ]; then             javaPs="`ps -p $pidValue | grep java`";         fi;     fi; }
+  124  # Check if conditions to run local METADATA are met
+  125  runMetadata() {     if [ "${START_LOCAL_MDS}" == true ] && [ -f ${metadataScript} ]; then         return 0;     else         return 1;     fi; }
+  126  startMetadata() {     if runMetadata; then         chmod +x ${metadataScript};         ${metadataScript} start;     fi; }
+  127  stopMetadata() {     if runMetadata; then         chmod +x ${metadataScript};         ${metadataScript} stop;     fi; }
+  128  # Check if conditions to run local router are met
+  129  runRouter() {     if [[ -f ${routerScript} ]]; then         return 0;     else         return 1;     fi; }
+  130  startRouter() {     if runRouter; then         chmod +x ${routerScript};         . ${routerScript} start;     fi; }
+  131  stopRouter() {     if runRouter; then         chmod +x ${routerScript};         ${routerScript} stop;     fi; }
+  132  # Check if conditions to run local replicator are met
+  133  runReplicator() {     if [ "${START_LOCAL_REPLICATOR}" == true ] && [ -f ${replicatorScript} ]; then         return 0;     else         return 1;     fi; }
+  134  startReplicator() {     if runReplicator; then         chmod +x ${replicatorScript};         ${replicatorScript} start;     fi; }
+  135  stopReplicator() {     if runReplicator; then         chmod +x ${replicatorScript};         ${replicatorScript} stop;     fi; }
+  136  stop() {     echo finding     CATALINA_MGNT_PORT=8015;     echo "Using the default catalina management port ($CATALINA_MGNT_PORT) to test shutdown";     isAlive;     findShutdownPort;     if [ $SHUTDOWN_PORT -eq 0 ] && [ -z "$javaPs" ]; then         echo "Artifactory Tomcat already stopped";         RETVAL=0;     else         echo "Stopping Artifactory Tomcat...";         if [ $SHUTDOWN_PORT -ne 0 ]; then             $TOMCAT_HOME/bin/shutdown.sh;             RETVAL=$?;         else             RETVAL=1;         fi;         killed=false;         if [ $RETVAL -ne 0 ]; then             echo "WARN: Artifactory Tomcat server shutdown script failed. Sending kill signal to $pidValue";             if [ -n "$pidValue" ]; then                 killed=true;                 kill $pidValue;                 RETVAL=$?;             fi;         fi         sleep 2;         findShutdownPort;         isAlive;         nbSeconds=1;         while [ $SHUTDOWN_PORT -ne 0 ] || [ -n "$javaPs" ] && [ $nbSeconds -lt 30 ]; do             if [ $nbSeconds -eq 10 ] && [ -n "$pidValue" ]; then                 echo "WARN: Artifactory Tomcat server shutdown not done after 10 seconds. Sending kill signal";                 kill $pidValue;                 RETVAL=$?;             fi;             if [ $nbSeconds -eq 25 ] && [ -n "$pidValue" ]; then                 echo "WARN: Artifactory Tomcat server shutdown not done after 25 seconds. Sending kill -9 signal";                 kill -9 $pidValue;                 RETVAL=$?;             fi;             sleep 1;             let "nbSeconds = $nbSeconds + 1";             findShutdownPort;             isAlive;         done;         if [ $SHUTDOWN_PORT -eq 0 ] && [ -z "$javaPs" ]; then            echo "Artifactory Tomcat stopped";         else            echo "ERROR: Artifactory Tomcat did not stop";            RETVAL=1;         fi;     fi;     [ $RETVAL=0 ] && rm -f "$ARTIFACTORY_PID";      stopReplicator;     stopMetadata;     stopRouter;  }
+  137  start() {     if [[ -f "/etc/opt/jfrog/artifactory/default" ]]; then         . /etc/opt/jfrog/artifactory/default;     fi;      JOIN_PATHS=$ARTIFACTORY_HOME;      if runMetadata;then        export METADATA_HOME="$JOIN_PATHS/metadata";        export JOIN_PATHS=$JOIN_PATHS:$METADATA_HOME;     fi;     export CATALINA_PID="$ARTIFACTORY_PID";     [ -x $TOMCAT_HOME/bin/catalina.sh ] || chmod +x $TOMCAT_HOME/bin/*.sh;     if [ -z "$@" ];     then         startRouter;         startReplicator;         startMetadata;          setCatalinaOpts;         $TOMCAT_HOME/bin/catalina.sh run;     else         if [ -n "$ARTIFACTORY_PID" ];         then             mkdir -p $(dirname "$ARTIFACTORY_PID") ||             errorArtHome "Could not create dir for $ARTIFACTORY_PID";         fi;         if [ "$@" == "stop" ];         then             setCatalinaOpts;             stop;         else             startRouter;             startReplicator;             startMetadata;             setCatalinaOpts             $TOMCAT_HOME/bin/catalina.sh "$@";         fi;     fi; }
+  138  check() {     if [ -f $ARTIFACTORY_PID ]; then         echo "Artifactory is running, on pid="`cat $ARTIFACTORY_PID`;         echo "";         exit 0;     fi;      echo "Checking arguments to Artifactory: ";     echo "ARTIFACTORY_HOME     =  $ARTIFACTORY_HOME";     echo "TOMCAT_HOME          =  $TOMCAT_HOME";     echo "ARTIFACTORY_PID      =  $ARTIFACTORY_PID";     echo "JAVA_HOME            =  $JAVA_HOME";     echo "JAVA_OPTIONS         =  $JAVA_OPTIONS";     echo;      exit 1; }
+  139  setCatalinaOpts() {     export CATALINA_OPTS="$JAVA_OPTIONS -Dartifactory.home=$ARTIFACTORY_HOME -Dfile.encoding=UTF8 -Djruby.bytecode.version=1.8 -Djruby.compile.invokedynamic=false -Djfrog.join.key.paths=$JOIN_PATHS"; }
+  140  checkJavaVersion(){     if [[ -n "$JAVA_HOME" ]] && [[ -x "$JAVA_HOME/bin/java" ]];  then         echo "Found java executable in JAVA_HOME ($JAVA_HOME)";         _java="$JAVA_HOME/bin/java";     elif type -p java; then         _java=java;     else         echo "No java found";     fi;      if [[ "$_java" ]]; then         "$_java" -version 2>&1|         awk -F\" '/version/{\
+  141              if ($2 < 1.8) {\
+  142                  printf "%s is too old must be at least java 1.8\n", $2;\
+  143                  exit 0;\
+  144              } else exit 1}' && exit 99;     fi; }
+  145  artBinDir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  146  export ARTIFACTORY_HOME="$(cd "$(dirname "${artBinDir}")" && pwd)"
+  147  export REPLICATOR_DATA="${ARTIFACTORY_HOME}/replicator"
+  148  export METADATA_DATA="${ARTIFACTORY_HOME}/metadata"
+  149  export ROUTER_DATA="${ARTIFACTORY_HOME}/router"
+  150  artDefaultFile="$artBinDir/artifactory.default"
+  151  replicatorScript=${artBinDir}/replicator/replicator.sh
+  152  metadataScript=${artBinDir}/metadata/metadata.sh
+  153  routerScript=${artBinDir}/../router/bin/router.sh
+  154  . $artDefaultFile || errorArtHome "ERROR: $artDefaultFile does not exist or not executable"
+  155  #!/bin/bash -x
+  156  #
+  157  # Init script for Artifactory service (currently systemd)
+  158  #
+  159  # chkconfig: 345 86 14
+  160  # description: Artifactory Tomcat Servlet Engine
+  161  # processname: artifactory
+  162  # pidfile: /var/opt/jfrog/run/artifactory.pid
+  163  #
+  164  ### BEGIN INIT INFO
+  165  # Provides:          artifactory
+  166  # Required-Start:    $remote_fs $syslog $network
+  167  # Required-Stop:     $remote_fs $syslog $network
+  168  # Default-Start:     3 4 5
+  169  # Default-Stop:      0 1 6
+  170  # Short-Description: Start Artifactory on Tomcat
+  171  # Description:       Manages the services needed to run Artifactory on a dedicated Tomcat
+  172  ### END INIT INFO
+  173  #
+  174  errorArtHome() {     echo;     echo -e "\033[31m** ERROR: $1\033[0m";     echo;     exit 1; }
+  175  checkArtHome() {     if [ -z "$ARTIFACTORY_HOME" ] || [ ! -d "$ARTIFACTORY_HOME" ]; then         errorArtHome "Artifactory home folder not defined or does not exists at $ARTIFACTORY_HOME";     fi; }
+  176  checkArtPid() {     if [ -z "$ARTIFACTORY_PID" ]; then         errorArtHome "Artifactory pid destination ARTIFACTORY_PID was not set in $artDefaultFile ! Please add it!";     fi; }
+  177  checkTomcatHome() {     if [ -z "$TOMCAT_HOME" ] || [ ! -d "$TOMCAT_HOME" ]; then         errorArtHome "Tomcat Artifactory folder not defined or does not exists at $TOMCAT_HOME";     fi; }
+  178  checkArtUser() {     if [ -z "$ARTIFACTORY_USER" ]; then         ARTIFACTORY_USER=${USER};     fi; }
+  179  findShutdownPort() {     SHUTDOWN_PORT=`netstat -vatn|grep LISTEN|grep -w $CATALINA_MGNT_PORT|wc -l`; }
+  180  isAlive() {     pidValue="";     javaPs="";     if [[ -e "$ARTIFACTORY_PID" ]]; then         pidValue=$(cat ${ARTIFACTORY_PID});         if [ -n "$pidValue" ]; then             javaPs="$(ps -p ${pidValue} | grep java)";         fi;     fi; }
+  181  # Check if conditions to run local METADATA are met
+  182  runMetadata() {     if [[ "${START_LOCAL_MDS}" == true ]] && [[ -f ${metadataScript} ]]; then         return 0;     else         return 1;     fi; }
+  183  startMetadata() {     if runMetadata; then         chmod +x ${metadataScript};         su -s "/bin/sh" ${ARTIFACTORY_USER} -c "${metadataScript} start";     fi; }
+  184  stopMetadata() {     if runMetadata; then         chmod +x ${metadataScript};         su -s "/bin/sh" ${ARTIFACTORY_USER} -c "${metadataScript} stop";     fi; }
+  185  # TODO: omerk - temp opt-out instead of opt-in
+  186  START_LOCAL_ROUTER=${START_LOCAL_ROUTER:-true}
+  187  # Check if conditions to run local router are met
+  188  runRouter() {     if [[ -f ${routerScript} ]]; then         return 0;     else         return 1;     fi; }
+  189  startRouter() {     if runRouter; then         chmod +x ${routerScript} && chown -R ${ARTIFACTORY_USER}:${ARTIFACTORY_USER} ${artBinDir}/../router;         su -s "/bin/sh" ${ARTIFACTORY_USER} -c "${routerScript} start";     fi; }
+  190  stopRouter() {     if runRouter; then         chmod +x ${routerScript};         su -s "/bin/sh" ${ARTIFACTORY_USER} -c "${routerScript} stop";     fi; }
+  191  # Check if conditions to run local replicator are met
+  192  runReplicator() {     if [ "${START_LOCAL_REPLICATOR}" == true ] && [ -f ${replicatorScript} ]; then         return 0;     else         return 1;     fi; }
+  193  startReplicator() {     if runReplicator; then         chmod +x ${replicatorScript};         su -s "/bin/sh" ${ARTIFACTORY_USER} -c "${replicatorScript} start";     fi; }
+  194  stopReplicator() {     if runReplicator; then         chmod +x ${replicatorScript};         su -s "/bin/sh" ${ARTIFACTORY_USER} -c "${replicatorScript} stop";     fi; }
+  195  start() {     JOIN_PATHS=$ARTIFACTORY_HOME;     if runMetadata;then        export METADATA_HOME="$ARTIFACTORY_HOME/metadata";        export JOIN_PATHS=$JOIN_PATHS:$METADATA_HOME;     fi;      JAVA_OPTIONS="$JAVA_OPTIONS -Djfrog.join.key.paths=$JOIN_PATHS";     export CATALINA_OPTS=$JAVA_OPTIONS;      isAlive;     findShutdownPort;     if [ ${SHUTDOWN_PORT} -ne 0 ] || [ -n "$javaPs" ]; then         echo "Artifactory Tomcat already started";     else         echo "Starting Artifactory tomcat as user $ARTIFACTORY_USER...";         noFileVal=$(ulimit -n);         minNoFileMax=32000;         if [ "$noFileVal" != "unlimited" ] && [ ${noFileVal} -lt ${minNoFileMax} ]; then             ulimit -n ${minNoFileMax} || echo "WARNING: Max number of open files $noFileVal is too small!
+  196  You should add:
+  197  artifactory soft nofile $minNoFileMax
+  198  artifactory hard nofile $minNoFileMax
+  199  to your /etc/security/limits.conf file.";         fi;          minNbProcess=1024;         nbProcess=$(ulimit -u);         if [ "$nbProcess" != "unlimited" ] && [ ${nbProcess} -lt ${minNbProcess} ]; then             ulimit -u ${minNbProcess} || echo "WARNING: Number of processes $nbProcess is too small!
+  200  You should add:
+  201  artifactory soft nproc $minNbProcess
+  202  artifactory hard nproc $minNbProcess
+  203  to your /etc/security/limits.conf file.";         fi;         su -s "/bin/sh" ${ARTIFACTORY_USER} -c "export JAVA_HOME='$JAVA_HOME'; $TOMCAT_HOME/bin/startup.sh";         RETVAL=$?;         if [ ${RETVAL} -ne 0 ]; then             errorArtHome "Artifactory Tomcat server did not start. Please check the logs";         fi;         findShutdownPort;         nbSeconds=1;         START_TMO=${START_TMO:-60};         while [ ${SHUTDOWN_PORT} -eq 0 ] && [ ${nbSeconds} -lt ${START_TMO} ]; do             sleep 1;             let "nbSeconds = $nbSeconds + 1";             findShutdownPort;         done;         if [ ${SHUTDOWN_PORT} -eq 0 ]; then             errorArtHome "Artifactory Tomcat server did not start in 60 seconds. Please check the logs";         fi;         echo "Artifactory Tomcat started in normal mode";         startRouter;         startReplicator;         startMetadata;         [ ${RETVAL}=0 ];     fi; }
+  204  stop() {     isAlive;     findShutdownPort;     if [ ${SHUTDOWN_PORT} -eq 0 ] && [ -z "$javaPs" ]; then         echo "Artifactory Tomcat already stopped";         RETVAL=0;     else         echo "Stopping Artifactory Tomcat...";         if [ ${SHUTDOWN_PORT} -ne 0 ]; then             su -s "/bin/sh" ${ARTIFACTORY_USER} -c "export JAVA_HOME='$JAVA_HOME'; $TOMCAT_HOME/bin/shutdown.sh";             RETVAL=$?;         else             RETVAL=1;         fi;         killed=false;         if [ ${RETVAL} -ne 0 ]; then             echo "WARN: Artifactory Tomcat server shutdown script failed. Sending kill signal to $pidValue";             if [ -n "$pidValue" ]; then                 killed=true;                 kill ${pidValue};                 RETVAL=$?;             fi;         fi         sleep 2;         findShutdownPort;         nbSeconds=1;         while [ ${SHUTDOWN_PORT} -ne 0 ] && [ ${nbSeconds} -lt 30 ]; do             if [ ${nbSeconds} -eq 10 ] && [ -n "$pidValue" ]; then                 echo "WARN: Artifactory Tomcat server shutdown not done after 10 seconds. Sending kill signal";                 kill ${pidValue};                 RETVAL=$?;             fi;             if [ ${nbSeconds} -eq 25 ] && [ -n "$pidValue" ]; then                 echo "WARN: Artifactory Tomcat server shutdown not done after 25 seconds. Sending kill -9 signal";                 kill -9 ${pidValue};                 RETVAL=$?;             fi;             sleep 1;             let "nbSeconds = $nbSeconds + 1";             findShutdownPort;         done;         if [ ${SHUTDOWN_PORT} -eq 0 ]; then            echo "Artifactory Tomcat stopped";         else            echo "ERROR: Artifactory Tomcat did not stop";            RETVAL=1;         fi;     fi;     stopRouter;     stopReplicator;     stopMetadata;     [ $RETVAL=0 ] && rm -f "$CATALINA_LOCK_FILE" "$ARTIFACTORY_PID"; }
+  205  start_and_wait() {     start;     if [ -e ${ARTIFACTORY_PID} ]; then   PID=$(cat ${ARTIFACTORY_PID});   while [ ! -e ~artifactory/logs/artifactory.log ]; do       sleep 10;   done;   tail -f ~artifactory/logs/artifactory.log &   terminating() {       echo "Received stop";       stop;       while [ -e ${ARTIFACTORY_PID} ] || [ ps ${PID} >/dev/null 2>&1 ]; do     sleep 1;       done;       exit 0;   };   trap terminating SIGINT SIGTERM;   while :; do       sleep 5;   done;     fi;     echo Something went wrong ${PID} $?; }
+  206  status() {     findShutdownPort;     if [ ${SHUTDOWN_PORT} -eq 0 ]; then         if [ -e "$ARTIFACTORY_PID" ]; then             echo "ERROR: Artifactory is stopped but the pid file $ARTIFACTORY_PID still exist";             RETVAL=1;         else             if [ -e "$CATALINA_LOCK_FILE" ]; then                 echo "ERROR: Artifactory is stopped but the lock file $CATALINA_LOCK_FILE still exist";                 RETVAL=2;             else                 echo "Artifactory Tomcat stopped";                 RETVAL=3;             fi;         fi;     else         echo "Artifactory Tomcat running";         RETVAL=0;     fi; }
+  207  check() {     if [ -f ${ARTIFACTORY_PID} ]; then         echo "Artifactory is running, on pid="$(cat ${ARTIFACTORY_PID});         echo "";         exit 0;     fi;      echo "Checking arguments to Artifactory: ";     echo "ARTIFACTORY_HOME     =  $ARTIFACTORY_HOME";     echo "ARTIFACTORY_USER     =  $ARTIFACTORY_USER";     echo "TOMCAT_HOME          =  $TOMCAT_HOME";     echo "ARTIFACTORY_PID      =  $ARTIFACTORY_PID";     echo "JAVA_HOME            =  $JAVA_HOME";     echo "JAVA_OPTIONS         =  $JAVA_OPTIONS";     echo;      checkJavaVersion;      exit 1; }
+  208  checkJavaVersion(){     if [[ -n "$JAVA_HOME" ]] && [[ -x "$JAVA_HOME/bin/java" ]];  then         echo found java executable in JAVA_HOME;         _java="$JAVA_HOME/bin/java";     elif type -p java; then         _java=java;     else         echo "no java";     fi;      if [[ "$_java" ]]; then         "$_java" -version 2>&1|         awk -F\" '/version/{\
+  209              if ($2 < 1.8) {\
+  210                  printf "%s is too old must be at least java 1.8\n", $2;\
+  211                  exit 0;\
+  212              } else exit 1}' && exit 99;     fi; }
+  213  #
+  214  artBinDir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  215  ARTIFACTORY_PID=""
+  216  artDefaultFile="/etc/opt/jfrog/artifactory/default"
+  217  if [ ! -e ${artDefaultFile} ]; then     sed '/ARTIFACTORY/s/^#//;/ARTIFACTORY_PID/s-$ARTIFACTORY_HOME-/var/opt/jfrog-' </opt/jfrog/artifactory/bin/artifactory.default >${artDefaultFile}; fi
+  218  . ${artDefaultFile} || errorArtHome "ERROR: $artDefaultFile does not exist or not executable"
+  219  git
+  220  clear
+  221  ld
+  222  l
+  223  ls
+  224  vi index.html
+  225  ls
+  226  git status
+  227  git add index.html
+  228  git status
+  229  vi index.html
+  230  git status
+  231  +++++++++++
+  232   clear
+  233  ls
+  234  git commit m "Fist changes"
+  235  git commit -m "Fist changes"
+  236  ls
+  237  vi contact.html
+  238  ls
+  239  git add contact.html
+  240  ls
+  241  git status
+  242  git add contact.html 
+  243  git status
+  244  #! /bin/sh
+  245  #
+  246  # Copyright (c) 1999, 2006 Tanuki Software Inc.
+  247  #
+  248  # Java Service Wrapper sh script.  Suitable for starting and stopping
+  249  #  wrapped Java applications on UNIX platforms.
+  250  #
+  251  #-----------------------------------------------------------------------------
+  252  # These settings can be modified to fit the needs of your application
+  253  # Default values for the Application variables, below. 
+  254  # 
+  255  # NOTE: The build for specific applications may override this during the resource-copying
+  256  # phase, to fill in a concrete name and avoid the use of the defaults specified here.
+  257  DEF_APP_NAME="SonarQube"
+  258  DEF_APP_LONG_NAME="SonarQube"
+  259  # Application
+  260  APP_NAME="${DEF_APP_NAME}"
+  261  APP_LONG_NAME="${DEF_APP_LONG_NAME}"
+  262  # Wrapper
+  263  WRAPPER_CMD="./wrapper"
+  264  WRAPPER_CONF="../../conf/wrapper.conf"
+  265  SHUTDOWNER_LIB_DIR="../../lib"
+  266  # Priority at which to run the wrapper.  See "man nice" for valid priorities.
+  267  #  nice is only used if a priority is specified.
+  268  PRIORITY=
+  269  # Location of the pid file.
+  270  PIDDIR="."
+  271  # If uncommented, causes the Wrapper to be shutdown using an anchor file.
+  272  #  When launched with the 'start' command, it will also ignore all INT and
+  273  #  TERM signals.
+  274  #IGNORE_SIGNALS=true
+  275  # If specified, the Wrapper will be run as the specified user.
+  276  # IMPORTANT - Make sure that the user has the required privileges to write
+  277  #  the PID file and wrapper.log files.  Failure to be able to write the log
+  278  #  file will cause the Wrapper to exit without any way to write out an error
+  279  #  message.
+  280  # NOTE - This will set the user which is used to run the Wrapper as well as
+  281  #  the JVM and is not useful in situations where a privileged resource or
+  282  #  port needs to be allocated prior to the user being changed.
+  283  #RUN_AS_USER=
+  284  # The following two lines are used by the chkconfig command. Change as is
+  285  #  appropriate for your application.  They should remain commented.
+  286  # chkconfig: 2345 20 80
+  287  # description: Test Wrapper Sample Application
+  288  # Do not modify anything beyond this point
+  289  #-----------------------------------------------------------------------------
+  290  # Get the fully qualified path to the script
+  291  case $0 in     /*)         SCRIPT="$0";         ;;     *)         PWD=`pwd`;         SCRIPT="$PWD/$0";         ;; esac
+  292  # Resolve the true real path without any sym links.
+  293  CHANGED=true
+  294  while [ "X$CHANGED" != "X" ]; do     SAFESCRIPT=`echo $SCRIPT | sed -e 's; ;:;g'`     TOKENS=`echo $SAFESCRIPT | sed -e 's;/; ;g'`;     REALPATH=;     for C in $TOKENS; do         C=`echo $C | sed -e 's;:; ;g'`;         REALPATH="$REALPATH/$C"         while [ -h "$REALPATH" ] ; do             LS="`ls -ld "$REALPATH"`";             LINK="`expr "$LS" : '.*-> \(.*\)$'`";             if expr "$LINK" : '/.*' > /dev/null; then                 REALPATH="$LINK";             else                 REALPATH="`dirname "$REALPATH"`""/$LINK";             fi;         done;     done;      if [ "$REALPATH" = "$SCRIPT" ];     then         CHANGED="";     else         SCRIPT="$REALPATH";     fi; done
+  295  # Change the current directory to the location of the script
+  296  cd "`dirname "$REALPATH"`"
+  297  REALDIR=`pwd`
+  298  # If the PIDDIR is relative, set its value relative to the full REALPATH to avoid problems if
+  299  #  the working directory is later changed.
+  300  FIRST_CHAR=`echo $PIDDIR | cut -c1,1`
+  301  if [ "$FIRST_CHAR" != "/" ]; then     PIDDIR=$REALDIR/$PIDDIR; fi
+  302  # Same test for WRAPPER_CMD
+  303  FIRST_CHAR=`echo $WRAPPER_CMD | cut -c1,1`
+  304  if [ "$FIRST_CHAR" != "/" ]; then     WRAPPER_CMD=$REALDIR/$WRAPPER_CMD; fi
+  305  # Same test for WRAPPER_CONF
+  306  FIRST_CHAR=`echo $WRAPPER_CONF | cut -c1,1`
+  307  if [ "$FIRST_CHAR" != "/" ]; then     WRAPPER_CONF=$REALDIR/$WRAPPER_CONF; fi
+  308  # Same test for SHUTDOWNER_LIB_DIR
+  309  FIRST_CHAR=`echo $SHUTDOWNER_LIB_DIR | cut -c1,1`
+  310  if [ "$FIRST_CHAR" != "/" ]; then     SHUTDOWNER_LIB_DIR=$REALDIR/$SHUTDOWNER_LIB_DIR; fi
+  311  # Process ID
+  312  ANCHORFILE="$PIDDIR/$APP_NAME.anchor"
+  313  PIDFILE="$PIDDIR/$APP_NAME.pid"
+  314  LOCKDIR="/var/lock/subsys"
+  315  LOCKFILE="$LOCKDIR/$APP_NAME"
+  316  pid=""
+  317  # Resolve the location of the 'ps' command
+  318  PSEXE="/usr/bin/ps"
+  319  if [ ! -x "$PSEXE" ]; then     PSEXE="/bin/ps";     if [ ! -x "$PSEXE" ];     then         echo "Unable to locate 'ps'.";         echo "Please report this message along with the location of the command on your system.";         exit 1;     fi; fi
+  320  # Resolve the os
+  321  DIST_OS=`uname -s | tr [:upper:] [:lower:] | tr -d [:blank:]`
+  322  case "$DIST_OS" in     'sunos')         DIST_OS="solaris";         ;;     'hp-ux' | 'hp-ux64')         DIST_OS="hpux";         ;;     'darwin')         DIST_OS="macosx";         ;;     'unix_sv')         DIST_OS="unixware";         ;; esac
+  323  # Resolve the architecture
+  324  DIST_ARCH=`uname -p | tr [:upper:] [:lower:] | tr -d [:blank:]`
+  325  if [ "$DIST_ARCH" = "unknown" ]; then     DIST_ARCH=`uname -m | tr [:upper:] [:lower:] | tr -d [:blank:]`; fi
+  326  case "$DIST_ARCH" in     'amd64' | 'athlon' | 'ia32' | 'ia64' | 'i386' | 'i486' | 'i586' | 'i686' | 'x86_64')         DIST_ARCH="x86";         ;;     'ip27')         DIST_ARCH="mips";         ;;     'power' | 'powerpc' | 'power_pc' | 'ppc64')         DIST_ARCH="ppc";         ;;     'pa_risc' | 'pa-risc')         DIST_ARCH="parisc";         ;;     'sun4u' | 'sparcv9')         DIST_ARCH="sparc";         ;;     '9000/800')         DIST_ARCH="parisc";         ;; esac
+  327  outputFile() {     if [ -f "$1" ];     then         echo "  $1 (Found but not executable.)";     else         echo "  $1";     fi; }
+  328  # Decide on the wrapper binary to use.
+  329  # If a 32-bit wrapper binary exists then it will work on 32 or 64 bit
+  330  #  platforms, if the 64-bit binary exists then the distribution most
+  331  #  likely wants to use long names.  Otherwise, look for the default.
+  332  # For macosx, we also want to look for universal binaries.
+  333  WRAPPER_TEST_CMD="$WRAPPER_CMD-$DIST_OS-$DIST_ARCH-32"
+  334  if [ -x "$WRAPPER_TEST_CMD" ]; then     WRAPPER_CMD="$WRAPPER_TEST_CMD"; else     if [ "$DIST_OS" = "macosx" ];     then         WRAPPER_TEST_CMD="$WRAPPER_CMD-$DIST_OS-universal-32";         if [ -x "$WRAPPER_TEST_CMD" ];         then             WRAPPER_CMD="$WRAPPER_TEST_CMD";         else             WRAPPER_TEST_CMD="$WRAPPER_CMD-$DIST_OS-$DIST_ARCH-64";             if [ -x "$WRAPPER_TEST_CMD" ];             then                 WRAPPER_CMD="$WRAPPER_TEST_CMD";             else                 WRAPPER_TEST_CMD="$WRAPPER_CMD-$DIST_OS-universal-64";                 if [ -x "$WRAPPER_TEST_CMD" ];                 then                     WRAPPER_CMD="$WRAPPER_TEST_CMD";                 else                     if [ ! -x "$WRAPPER_CMD" ];                     then                         echo "Unable to locate any of the following binaries:";                         outputFile "$WRAPPER_CMD-$DIST_OS-$DIST_ARCH-32";                         outputFile "$WRAPPER_CMD-$DIST_OS-universal-32";                         outputFile "$WRAPPER_CMD-$DIST_OS-$DIST_ARCH-64";                         outputFile "$WRAPPER_CMD-$DIST_OS-universal-64";                         outputFile "$WRAPPER_CMD";                         exit 1;                     fi;                 fi;             fi;         fi;     else         WRAPPER_TEST_CMD="$WRAPPER_CMD-$DIST_OS-$DIST_ARCH-64";         if [ -x "$WRAPPER_TEST_CMD" ];         then             WRAPPER_CMD="$WRAPPER_TEST_CMD";         else             if [ ! -x "$WRAPPER_CMD" ];             then                 echo "Unable to locate any of the following binaries:";                 outputFile "$WRAPPER_CMD-$DIST_OS-$DIST_ARCH-32";                 outputFile "$WRAPPER_CMD-$DIST_OS-$DIST_ARCH-64";                 outputFile "$WRAPPER_CMD";                 exit 1;             fi;         fi;     fi; fi
+  335  git status
+  336  cd GitRepository/
+  337  ls
+  338  git status
+  339  cd BesantTech/
+  340  ls
+  341  git status
+  342  git log
+  343  git status
+  344  git ls-files
+  345  git commit -m "Commit contact file changes"
+  346  git ls-files
+  347  git status
+  348  git add -a
+  349  clear
+  350  git status
+  351  git add index.html
+  352  git status
+  353  git commit -m "index file changes"
+  354  git status
+  355  git ls
+  356  git ls-files
+  357  rm contact.html
+  358  ls
+  359  git status
+  360  git commit -m "contact.html file deleted"
+  361  git ls
+  362  git ls-fiels
+  363  git ls-files
+  364  git ls-fiels
+  365  git ls-files
+  366  git rm contact.html
+  367  ls
+  368  git ls
+  369  git ls-files
+  370  git status
+  371  git commit -m "delete contact.html files"
+  372  git status
+  373  git ls
+  374  vi gallery.html
+  375  type gallery.html
+  376  print gallery.html
+  377  git add gallery.html
+  378  git add gallery.html
+  379  ls
+  380  git status
+  381  git commit -m "gallery.htl file added to local repo"
+  382  git status
+  383  git status
+  384  clear
+  385  git ls
+  386  ls
+  387  git ls-files
+  388  vi contact.html
+  389  vi contact.html
+  390  ls
+  391  git ls-files
+  392  git status
+  393  git add .
+  394  git status
+  395  git commit -m "contact files added again to local repo"
+  396  git ls
+  397  git ls
+  398  ls
+  399  git ls-files
+  400  git log -Head-oneline
+  401  git log -Head-oneLine
+  402  git log
+  403  git log --oneline
+  404  git rm contact.html --cached
+  405  ls
+  406  git ls-files
+  407  git status
+  408  git commit -m "file deleted from local repo only"
+  409  git status
+  410  ls
+  411  git ls-files
+  412  git log -oneline
+  413  git log --oneline
+  414  git reset 4bdbad4
+  415  dir
+  416  clear
+  417  git history
+  418  git history
+  419  history
+  420  history > git_sat_command.txt
